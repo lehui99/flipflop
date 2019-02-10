@@ -51,8 +51,14 @@ import signal
 import struct
 import errno
 import threading
-import fcntl
-import resource
+try:
+    import fcntl
+except ImportError:
+    pass
+try:
+    import resource
+except ImportError:
+    pass
 import traceback
 
 # Constants from the spec.
@@ -749,10 +755,11 @@ class WSGIServer(object):
     # so).
     maxwrite = 8192
 
-    def __init__(self, application):
+    def __init__(self, application, max_connections=None):
         self.application = application
         self.environ = {}
-        max_connections = resource.getrlimit(resource.RLIMIT_NOFILE)[0]
+        if max_connections is None:
+            max_connections = resource.getrlimit(resource.RLIMIT_NOFILE)[0]
         self.capability = {
             FCGI_MAX_CONNS: max_connections,
             FCGI_MAX_REQS: max_connections,
@@ -920,7 +927,7 @@ class WSGIServer(object):
                     (self.__class__.__name__, name))
                 environ[name] = default
 
-    def run(self):
+    def run(self, sock=None, close_on_exec=True):
         """Main loop.
 
         Exit on SIGHUP, SIGINT, SIGTERM. Return True if SIGHUP was received,
@@ -932,8 +939,9 @@ class WSGIServer(object):
             self._web_server_addrs = [
                 x.strip() for x in self._web_server_addrs.split(',')]
 
-        sock = socket.fromfd(
-            FCGI_LISTENSOCK_FILENO, socket.AF_INET, socket.SOCK_STREAM)
+        if sock is None:
+            sock = socket.fromfd(
+                FCGI_LISTENSOCK_FILENO, socket.AF_INET, socket.SOCK_STREAM)
         try:
             sock.getpeername()
         except socket.error as exception:
@@ -957,7 +965,8 @@ class WSGIServer(object):
                 signal.signal(sig, self._int_handler)
 
         # Set close-on-exec
-        fcntl.fcntl(sock.fileno(), fcntl.F_SETFD, fcntl.FD_CLOEXEC)
+        if close_on_exec:
+            fcntl.fcntl(sock.fileno(), fcntl.F_SETFD, fcntl.FD_CLOEXEC)
 
         # Main loop.
         while self._keep_going:
@@ -976,8 +985,9 @@ class WSGIServer(object):
                         continue
                     raise
 
-                fcntl.fcntl(
-                    client_socket.fileno(), fcntl.F_SETFD, fcntl.FD_CLOEXEC)
+                if close_on_exec:
+                    fcntl.fcntl(
+                        client_socket.fileno(), fcntl.F_SETFD, fcntl.FD_CLOEXEC)
 
                 if not (self._web_server_addrs is None or
                         (len(addr) == 2 and
